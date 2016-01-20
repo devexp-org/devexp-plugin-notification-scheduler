@@ -1,0 +1,13 @@
+{
+  "name": "devexp-plugin-notification-scheduler",
+  "authors": [
+    "Stanislav Sysoev <d4rkr00t@gmail.com> (http://sysoev.org)",
+    "Artem Semenov <xxxxxx@yandex-team.ru>"
+  ],
+  "license": "MIT",
+  "version": "0.1.0",
+  "description": "Developer Experiments Plugin",
+  "repository": {
+    "url": "https://github.com/devexp-org/devexp-plugin-notification-scheduler"
+  }
+}
