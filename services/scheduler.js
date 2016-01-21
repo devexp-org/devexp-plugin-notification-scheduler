@@ -2,7 +2,7 @@
 
 import moment from 'moment';
 import scheduler from 'node-schedule';
-import { isEmpty } from 'lodash';
+import { isEmpty, forEach } from 'lodash';
 
 const EVENT_NAME = 'review:scheduler:ping';
 
@@ -18,22 +18,24 @@ const EVENT_NAME = 'review:scheduler:ping';
 export default function (options, imports) {
 
   const model = imports.model;
+  const events = imports.events;
   const logger = imports.logger;
   const PullRequestModel = model.get('pull_request');
-  const events = imports.events;
 
-  function cancelJob(pullId) {
-    if (isEmpty(scheduler.scheduledJobs)) {
-      return Promise.resolve();
-    }
+  const store = {};
 
-    const job = scheduler.scheduledJobs['pull-' + pullId];
+  function cancelJob(payload) {
+    const id = payload.pullRequest.id;
+    const job = store['pull-' + id];
 
     if (!job) {
       return Promise.resolve();
     }
 
-    return Promise.resolve(job.cancel());
+    job.cancel();
+    delete store['pull-' + id];
+
+    return Promise.resolve();
   }
 
   function createJob(payload, tf = options.days) {
@@ -48,57 +50,55 @@ export default function (options, imports) {
       expirationTime.add(1, 'days');
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const job = scheduler.scheduleJob('pull-' + id, expirationTime.toDate(), function () {
         PullRequestModel
           .findById(id)
           .then(pullRequest => {
-
             // nobody cares about review
             if (!pullRequest.review_comments && pullRequest.state !== 'closed') {
               events.emit(EVENT_NAME, { pullRequest });
               createJob(payload);
             } else {
-              cancelJob(id);
+              cancelJob(payload);
             }
-
-          }, ::logger.error);
+          })
+          .then(resolve, reject);
       });
 
-      return resolve(job);
-
+      store['pull-' + id] = job;
     });
 
   }
 
-  function onReviewDone(payload) {
-    return cancelJob(payload.pullRequest.id).catch(::logger.error);
+  function shutdown() {
+    forEach(store, (job) => job.cancel());
+
+    return Promise.resolve();
   }
 
   function onReviewStart(payload) {
     return createJob(payload).catch(::logger.error);
   }
 
+  function onReviewDone(payload) {
+    return cancelJob(payload).catch(::logger.error);
+  }
+
   events.on('review:approved', onReviewDone);
   events.on('review:complete', onReviewDone);
 
-  events.on('review:command:start', onReviewStart);
   events.on('review:command:stop', onReviewDone);
+  events.on('review:command:start', onReviewStart);
 
-  return new Promise(resolve => {
-    // Beware! this is not a native Promise (Mongoose)
+  return new Promise((resolve, reject) => {
     PullRequestModel
-      .find({
-        state: 'open',
-        'review.status': 'inprogress'
-      })
+      .findInReview()
       .then(result => {
-        result.forEach(pullRequest => {
-          return createJob({ pullRequest });
-        });
-
-        resolve();
-      });
+        result.map(pullRequest => onReviewStart({ pullRequest }));
+        return { shutdown };
+      })
+      .then(resolve, reject);
   });
 
 }
